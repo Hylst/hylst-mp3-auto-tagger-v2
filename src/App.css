@@ -1,0 +1,62 @@
+.app-container {
+  padding-top: 2rem;
+  padding-bottom: 4rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+  .app-container {
+    padding-top: 1rem;
+    padding-bottom: 2rem;
+  }
+}
+
+/* Animation for loading states */
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* File uploader styles */
+.dropzone {
+  border: 2px dashed #ccc;
+  border-radius: 8px;
+  padding: 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dropzone:hover {
+  border-color: #3f51b5;
+  background-color: rgba(63, 81, 181, 0.04);
+}
+
+.dropzone-active {
+  border-color: #3f51b5;
+  background-color: rgba(63, 81, 181, 0.08);
+}
+
+/* Metadata editor styles */
+.metadata-section {
+  margin-bottom: 1.5rem;
+}
+
+.keyword-chip {
+  margin: 0.25rem;
+}
+
+/* Cover art styles */
+.cover-art {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
