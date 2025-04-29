@@ -225,14 +225,17 @@ async function generateCoverArt(keywords) {
 // API endpoint to upload MP3 files
 app.post('/api/upload', upload.array('files'), async (req, res) => {
   try {
+    console.log(`Début du traitement de ${req.files.length} fichier(s) MP3`);
     const results = [];
     
     for (const file of req.files) {
       const filePath = file.path;
       const stats = fs.statSync(filePath);
       
+      console.log(`Analyse du fichier MP3: ${file.originalname}`);
       // Analyze the MP3 file
       const analysis = await analyzeWithGemini(filePath);
+      console.log(`Analyse terminée pour ${file.originalname}: genre détecté: ${analysis.genre}, sous-genre: ${analysis.subgenre}`);
       
       results.push({
         id: path.basename(filePath),
@@ -245,7 +248,8 @@ app.post('/api/upload', upload.array('files'), async (req, res) => {
       });
     }
     
-    res.json({ success: true, files: results });
+    console.log(`Traitement terminé avec succès pour ${req.files.length} fichier(s)`);
+    res.json({ success: true, files: results, logs: { message: `${req.files.length} fichier(s) analysé(s) avec succès`, details: req.files.map(f => f.originalname) } });
   } catch (error) {
     console.error('Error processing upload:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -256,10 +260,17 @@ app.post('/api/upload', upload.array('files'), async (req, res) => {
 app.post('/api/write-tags', async (req, res) => {
   try {
     const { filePath, metadata } = req.body;
+    const fileName = path.basename(filePath);
+    
+    console.log(`Début de l'écriture des tags ID3 pour: ${fileName}`);
     
     if (!fs.existsSync(filePath)) {
+      console.error(`Fichier non trouvé: ${filePath}`);
       return res.status(404).json({ success: false, error: 'File not found' });
     }
+    
+    console.log(`Préparation des tags pour: ${fileName}`);
+    console.log(`Tags à écrire: titre="${metadata.title}", genre="${metadata.genre}", sous-genre="${metadata.subgenre}"`);
     
     const tags = {
       title: metadata.title,
@@ -278,6 +289,7 @@ app.post('/api/write-tags', async (req, res) => {
     
     // Add lyrics if present
     if (metadata.lyrics) {
+      console.log(`Ajout des paroles en langue: ${metadata.language || 'eng'}`);
       tags.unsynchronisedLyrics = {
         language: metadata.language || 'eng',
         text: metadata.lyrics
@@ -286,6 +298,7 @@ app.post('/api/write-tags', async (req, res) => {
     
     // Add cover art if present
     if (metadata.coverArt) {
+      console.log(`Traitement de la pochette d'album pour: ${fileName}`);
       try {
         // Check if the coverArt is a data URL
         if (metadata.coverArt.startsWith('data:image/')) {
@@ -302,23 +315,32 @@ app.post('/api/write-tags', async (req, res) => {
               description: 'Album cover',
               imageBuffer
             };
-            console.log(`Added cover art (${imageType}) to ID3 tags`);
+            console.log(`Pochette d'album ajoutée (${imageType}) aux tags ID3`);
           }
         } else if (metadata.coverArt.startsWith('http')) {
           // For remote URLs, we would need to download the image first
           // This would be implemented in a production app
-          console.log('Remote cover art URLs not supported yet');
+          console.log('Les URLs distantes pour les pochettes ne sont pas encore supportées');
         }
       } catch (imageError) {
-        console.error('Error adding cover art to ID3 tags:', imageError);
+        console.error(`Erreur lors de l'ajout de la pochette aux tags ID3:`, imageError);
       }
     }
     
+    console.log(`Écriture des tags ID3 dans le fichier: ${fileName}`);
     const success = NodeID3.write(tags, filePath);
     
     if (success) {
-      res.json({ success: true });
+      console.log(`Tags ID3 écrits avec succès pour: ${fileName}`);
+      res.json({ 
+        success: true, 
+        logs: { 
+          message: `Tags ID3 écrits avec succès`, 
+          details: `Fichier: ${fileName}\nTitre: ${metadata.title}\nGenre: ${metadata.genre}\nSous-genre: ${metadata.subgenre}` 
+        } 
+      });
     } else {
+      console.error(`Échec de l'écriture des tags ID3 pour: ${fileName}`);
       res.status(500).json({ success: false, error: 'Failed to write tags' });
     }
   } catch (error) {
@@ -331,17 +353,30 @@ app.post('/api/write-tags', async (req, res) => {
 app.post('/api/rename', (req, res) => {
   try {
     const { filePath, newName } = req.body;
+    const originalFileName = path.basename(filePath);
+    
+    console.log(`Demande de renommage du fichier: ${originalFileName} en ${newName}.mp3`);
     
     if (!fs.existsSync(filePath)) {
+      console.error(`Fichier non trouvé pour le renommage: ${filePath}`);
       return res.status(404).json({ success: false, error: 'File not found' });
     }
     
     const dir = path.dirname(filePath);
     const newPath = path.join(dir, newName + '.mp3');
     
+    console.log(`Renommage de ${originalFileName} vers ${newName}.mp3`);
     fs.renameSync(filePath, newPath);
+    console.log(`Fichier renommé avec succès: ${originalFileName} → ${newName}.mp3`);
     
-    res.json({ success: true, newPath });
+    res.json({ 
+      success: true, 
+      newPath,
+      logs: {
+        message: `Fichier renommé avec succès`,
+        details: `${originalFileName} → ${newName}.mp3`
+      }
+    });
   } catch (error) {
     console.error('Error renaming file:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -354,13 +389,23 @@ app.post('/api/generate-cover', async (req, res) => {
     const { keywords } = req.body;
     
     if (!keywords || (Array.isArray(keywords) && keywords.length === 0)) {
+      console.error('Aucun mot-clé fourni pour la génération de pochette');
       return res.status(400).json({ success: false, error: 'Keywords are required for cover art generation' });
     }
     
-    console.log('Generating cover art with keywords:', Array.isArray(keywords) ? keywords.join(', ') : keywords);
+    const keywordsStr = Array.isArray(keywords) ? keywords.join(', ') : keywords;
+    console.log(`Début de la génération de pochette avec les mots-clés: ${keywordsStr}`);
     const result = await generateCoverArt(keywords);
+    console.log(`Pochette générée avec succès`);
     
-    res.json({ success: true, imageUrl: result.imageUrl });
+    res.json({ 
+      success: true, 
+      imageUrl: result.imageUrl,
+      logs: {
+        message: `Pochette générée avec succès`,
+        details: `Mots-clés utilisés: ${keywordsStr}`
+      }
+    });
   } catch (error) {
     console.error('Error generating cover art:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -371,16 +416,29 @@ app.post('/api/generate-cover', async (req, res) => {
 app.post('/api/export-json', (req, res) => {
   try {
     const { data, filename } = req.body;
+    const exportFilename = `${filename || 'export'}.json`;
+    
+    console.log(`Début de l'exportation JSON pour: ${exportFilename}`);
     
     const exportsDir = path.join(__dirname, 'exports');
     if (!fs.existsSync(exportsDir)) {
+      console.log(`Création du répertoire d'exportation: ${exportsDir}`);
       fs.mkdirSync(exportsDir, { recursive: true });
     }
     
-    const jsonPath = path.join(exportsDir, `${filename || 'export'}.json`);
+    const jsonPath = path.join(exportsDir, exportFilename);
+    console.log(`Écriture du fichier JSON: ${jsonPath}`);
     fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2));
+    console.log(`Exportation JSON terminée avec succès: ${exportFilename}`);
     
-    res.json({ success: true, path: jsonPath });
+    res.json({ 
+      success: true, 
+      path: jsonPath,
+      logs: {
+        message: `Exportation JSON terminée`,
+        details: `Fichier: ${exportFilename}\nChemin: ${jsonPath}`
+      }
+    });
   } catch (error) {
     console.error('Error exporting JSON:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -393,5 +451,13 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`=== MP3 Auto Tagger ===`);
+  console.log(`Serveur démarré sur le port ${PORT}`);
+  console.log(`API endpoints disponibles:`);
+  console.log(`- POST /api/upload: Télécharger et analyser des fichiers MP3`);
+  console.log(`- POST /api/write-tags: Écrire les tags ID3`);
+  console.log(`- POST /api/rename: Renommer un fichier`);
+  console.log(`- POST /api/generate-cover: Générer une pochette d'album`);
+  console.log(`- POST /api/export-json: Exporter les métadonnées en JSON`);
+  console.log(`======================`);
 });
