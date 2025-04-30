@@ -1,8 +1,8 @@
 import React from 'react';
-import { Box, Typography, List, ListItem, ListItemButton, ListItemText, ListItemAvatar, Avatar, Divider } from '@mui/material';
+import { Box, Typography, List, ListItem, ListItemButton, ListItemText, ListItemAvatar, Avatar, Divider, Checkbox } from '@mui/material';
 import MusicNoteIcon from '@mui/icons-material/MusicNote';
 
-const FileList = ({ files, selectedFile, onFileSelect }) => {
+const FileList = ({ files, selectedFile, selectedFiles = [], onFileSelect, onBatchSelect, batchMode = false }) => {
   if (!files || files.length === 0) {
     return null;
   }
@@ -10,7 +10,7 @@ const FileList = ({ files, selectedFile, onFileSelect }) => {
   return (
     <Box>
       <Typography variant="h6" component="h3" gutterBottom>
-        Uploaded Files ({files.length})
+        Uploaded Files ({files.length}) {batchMode && <span style={{ fontSize: '0.8em', color: 'text.secondary' }}> - Mode traitement par lots</span>}
       </Typography>
       <List sx={{ width: '100%', bgcolor: 'background.paper' }}>
         {files.map((file, index) => (
@@ -18,9 +18,17 @@ const FileList = ({ files, selectedFile, onFileSelect }) => {
             {index > 0 && <Divider variant="inset" component="li" />}
             <ListItem disablePadding>
               <ListItemButton 
-                selected={selectedFile && selectedFile.id === file.id}
-                onClick={() => onFileSelect(file)}
+                selected={batchMode ? selectedFiles.some(f => f.id === file.id) : (selectedFile && selectedFile.id === file.id)}
+                onClick={() => batchMode ? onBatchSelect(file) : onFileSelect(file)}
               >
+                {batchMode && (
+                  <Checkbox
+                    edge="start"
+                    checked={selectedFiles.some(f => f.id === file.id)}
+                    tabIndex={-1}
+                    disableRipple
+                  />
+                )}
                 <ListItemAvatar>
                   <Avatar>
                     <MusicNoteIcon />

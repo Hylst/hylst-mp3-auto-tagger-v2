@@ -16,6 +16,11 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
+// Endpoint de statut pour vérifier si le serveur est en cours d'exécution
+app.get('/api/status', (req, res) => {
+  res.json({ status: 'ok', message: 'Le serveur est en cours d\'exécution' });
+});
+
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -164,11 +169,19 @@ async function generateCoverArt(keywords) {
       return { imageUrl: 'https://via.placeholder.com/500x500?text=Generated+Cover+Art' };
     }
     
+    // Vérifier que les mots-clés sont valides
+    if (!keywords || (Array.isArray(keywords) && keywords.length === 0)) {
+      console.error('Aucun mot-clé fourni pour la génération de pochette');
+      return { imageUrl: 'https://via.placeholder.com/500x500?text=Keywords+Required' };
+    }
+    
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
     
     // Create a prompt for image generation
     const keywordsString = Array.isArray(keywords) ? keywords.join(', ') : keywords;
+    console.log(`Génération de pochette avec les mots-clés: ${keywordsString}`);
+    
     const prompt = `Generate a high-quality album cover art image based on these keywords: ${keywordsString}. 
     The image should be visually appealing, professional, and suitable for use as album artwork.
     Return ONLY the base64-encoded image data without any text or explanation.`;
@@ -199,19 +212,22 @@ async function generateCoverArt(keywords) {
       
       // Create a data URL for the image
       const imageUrl = `data:image/jpeg;base64,${imageData}`;
+      console.log('Pochette générée avec succès (format inlineData)');
       return { imageUrl };
     } else {
       // If no image data is found, try to extract text that might contain image data
       const text = response.text();
+      console.log('Recherche de données d\'image dans la réponse textuelle');
       
       // Check if the text contains a base64 image
       const base64Match = text.match(/data:image\/(jpeg|png|gif);base64,([^"\s]+)/i);
       if (base64Match && base64Match[2]) {
+        console.log(`Pochette trouvée dans le texte (format ${base64Match[1]})`);
         return { imageUrl: `data:image/${base64Match[1]};base64,${base64Match[2]}` };
       }
       
       // If we still don't have an image, use a placeholder
-      console.warn('No image data found in Gemini response, using placeholder');
+      console.warn('Aucune donnée d\'image trouvée dans la réponse Gemini, utilisation d\'un placeholder');
       const placeholderText = encodeURIComponent(keywordsString.substring(0, 30));
       return { imageUrl: `https://via.placeholder.com/500x500?text=${placeholderText}` };
     }
@@ -256,36 +272,107 @@ app.post('/api/upload', upload.array('files'), async (req, res) => {
   }
 });
 
+// Importer les fonctions de gestion des métadonnées avancées
+const metadataConfigPath = path.join(__dirname, 'src', 'config', 'metadataConfig.js');
+let advancedTags, namingTemplates, musicPresets, applyNamingTemplate;
+
+// Charger dynamiquement la configuration des métadonnées
+try {
+  // Pour Node.js, nous devons utiliser require() au lieu d'import
+  const metadataConfig = require('./src/config/metadataConfig.js');
+  advancedTags = metadataConfig.advancedTags;
+  namingTemplates = metadataConfig.namingTemplates;
+  musicPresets = metadataConfig.musicPresets;
+  applyNamingTemplate = metadataConfig.applyNamingTemplate;
+  console.log('Configuration des métadonnées avancées chargée avec succès');
+} catch (error) {
+  console.error('Erreur lors du chargement de la configuration des métadonnées:', error);
+  // Définir des valeurs par défaut en cas d'erreur
+  advancedTags = { standard: {}, extended: {}, custom: {} };
+  namingTemplates = {};
+  musicPresets = {};
+  applyNamingTemplate = (template, metadata) => template;
+}
+
 // API endpoint to write ID3 tags
 app.post('/api/write-tags', async (req, res) => {
   try {
-    const { filePath, metadata } = req.body;
+    const { filePath, metadata, namingTemplate } = req.body;
+    
+    // Vérifier que les paramètres requis sont présents
+    if (!filePath) {
+      console.error('Aucun chemin de fichier fourni pour l\'écriture des tags ID3');
+      return res.status(400).json({ success: false, error: 'File path is required' });
+    }
+    
+    if (!metadata) {
+      console.error('Aucune métadonnée fournie pour l\'écriture des tags ID3');
+      return res.status(400).json({ success: false, error: 'Metadata is required' });
+    }
+    
     const fileName = path.basename(filePath);
     
     console.log(`Début de l'écriture des tags ID3 pour: ${fileName}`);
+    console.log(`Chemin complet du fichier: ${filePath}`);
     
-    if (!fs.existsSync(filePath)) {
-      console.error(`Fichier non trouvé: ${filePath}`);
+    // Vérifier si le chemin est absolu ou relatif
+    const absoluteFilePath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath);
+    console.log(`Chemin absolu utilisé: ${absoluteFilePath}`);
+    
+    if (!fs.existsSync(absoluteFilePath)) {
+      console.error(`Fichier non trouvé: ${absoluteFilePath}`);
       return res.status(404).json({ success: false, error: 'File not found' });
     }
     
     console.log(`Préparation des tags pour: ${fileName}`);
-    console.log(`Tags à écrire: titre="${metadata.title}", genre="${metadata.genre}", sous-genre="${metadata.subgenre}"`);
+    console.log(`Tags à écrire: titre="${metadata.title || 'Non spécifié'}", genre="${metadata.genre || 'Non spécifié'}", sous-genre="${metadata.subgenre || 'Non spécifié'}"`);
     
+    // Préparer les tags standard et étendus
     const tags = {
-      title: metadata.title,
+      title: metadata.title || '',
       artist: metadata.artist || '',
-      album: metadata.subgenre,
-      genre: metadata.genre,
-      comment: { language: 'eng', text: metadata.technical },
+      album: metadata.subgenre || '',
+      genre: metadata.genre || '',
+      comment: { language: 'eng', text: metadata.technical || '' },
       userDefinedText: [
-        { description: 'CREATIVE', value: metadata.creative },
-        { description: 'KEYWORDS', value: metadata.keywords.join(', ') },
-        { description: 'MOOD', value: metadata.mood.join(', ') },
-        { description: 'USAGE', value: metadata.usage.join(', ') },
+        { description: 'CREATIVE', value: metadata.creative || '' },
+        { description: 'KEYWORDS', value: Array.isArray(metadata.keywords) ? metadata.keywords.join(', ') : '' },
+        { description: 'MOOD', value: Array.isArray(metadata.mood) ? metadata.mood.join(', ') : '' },
+        { description: 'USAGE', value: Array.isArray(metadata.usage) ? metadata.usage.join(', ') : '' },
         { description: 'SONG', value: metadata.song || '1' }
       ]
     };
+    
+    // Ajouter les tags ID3v2.4 étendus s'ils sont présents dans les métadonnées
+    if (metadata.bpm) tags.bpm = metadata.bpm;
+    if (metadata.initialKey) tags.initialKey = metadata.initialKey;
+    if (metadata.composer) tags.composer = metadata.composer;
+    if (metadata.publisher) tags.publisher = metadata.publisher;
+    if (metadata.copyright) tags.copyright = metadata.copyright;
+    if (metadata.encodedBy) tags.encodedBy = metadata.encodedBy;
+    if (metadata.encodingSettings) tags.encodingSettings = metadata.encodingSettings;
+    if (metadata.language) tags.language = metadata.language;
+    if (metadata.compilation) tags.compilation = metadata.compilation;
+    if (metadata.year) tags.year = metadata.year;
+    if (metadata.trackNumber) tags.trackNumber = metadata.trackNumber;
+    if (metadata.date) tags.date = metadata.date;
+    
+    // Ajouter des tags personnalisés supplémentaires
+    if (metadata.energy) {
+      tags.userDefinedText.push({ description: 'ENERGY', value: metadata.energy });
+    }
+    if (metadata.danceability) {
+      tags.userDefinedText.push({ description: 'DANCEABILITY', value: metadata.danceability });
+    }
+    if (metadata.acousticness) {
+      tags.userDefinedText.push({ description: 'ACOUSTICNESS', value: metadata.acousticness });
+    }
+    if (metadata.instrumental) {
+      tags.userDefinedText.push({ description: 'INSTRUMENTAL', value: metadata.instrumental });
+    }
+    if (metadata.tempoCategory) {
+      tags.userDefinedText.push({ description: 'TEMPO_CATEGORY', value: metadata.tempoCategory });
+    }
     
     // Add lyrics if present
     if (metadata.lyrics) {
@@ -316,11 +403,15 @@ app.post('/api/write-tags', async (req, res) => {
               imageBuffer
             };
             console.log(`Pochette d'album ajoutée (${imageType}) aux tags ID3`);
+          } else {
+            console.warn('Format de données d\'image invalide dans la pochette');
           }
         } else if (metadata.coverArt.startsWith('http')) {
           // For remote URLs, we would need to download the image first
           // This would be implemented in a production app
           console.log('Les URLs distantes pour les pochettes ne sont pas encore supportées');
+        } else {
+          console.warn('Format de pochette non reconnu:', metadata.coverArt.substring(0, 30) + '...');
         }
       } catch (imageError) {
         console.error(`Erreur lors de l'ajout de la pochette aux tags ID3:`, imageError);
@@ -328,7 +419,7 @@ app.post('/api/write-tags', async (req, res) => {
     }
     
     console.log(`Écriture des tags ID3 dans le fichier: ${fileName}`);
-    const success = NodeID3.write(tags, filePath);
+    const success = NodeID3.write(tags, absoluteFilePath);
     
     if (success) {
       console.log(`Tags ID3 écrits avec succès pour: ${fileName}`);
@@ -336,7 +427,7 @@ app.post('/api/write-tags', async (req, res) => {
         success: true, 
         logs: { 
           message: `Tags ID3 écrits avec succès`, 
-          details: `Fichier: ${fileName}\nTitre: ${metadata.title}\nGenre: ${metadata.genre}\nSous-genre: ${metadata.subgenre}` 
+          details: `Fichier: ${fileName}\nTitre: ${metadata.title || 'Non spécifié'}\nGenre: ${metadata.genre || 'Non spécifié'}\nSous-genre: ${metadata.subgenre || 'Non spécifié'}` 
         } 
       });
     } else {
@@ -349,32 +440,104 @@ app.post('/api/write-tags', async (req, res) => {
   }
 });
 
-// API endpoint to rename file
-app.post('/api/rename', (req, res) => {
+// API endpoint pour appliquer un modèle de nommage
+app.post('/api/apply-naming-template', (req, res) => {
   try {
-    const { filePath, newName } = req.body;
-    const originalFileName = path.basename(filePath);
+    const { filePath, metadata, templatePattern } = req.body;
     
-    console.log(`Demande de renommage du fichier: ${originalFileName} en ${newName}.mp3`);
+    // Vérifier que les paramètres requis sont présents
+    if (!filePath || !templatePattern) {
+      console.error('Paramètres manquants pour l\'application du modèle de nommage');
+      return res.status(400).json({ success: false, error: 'File path and template pattern are required' });
+    }
     
-    if (!fs.existsSync(filePath)) {
-      console.error(`Fichier non trouvé pour le renommage: ${filePath}`);
+    // Vérifier si le fichier existe
+    const absoluteFilePath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath);
+    if (!fs.existsSync(absoluteFilePath)) {
+      console.error(`Fichier non trouvé: ${absoluteFilePath}`);
       return res.status(404).json({ success: false, error: 'File not found' });
     }
     
-    const dir = path.dirname(filePath);
-    const newPath = path.join(dir, newName + '.mp3');
+    // Appliquer le modèle de nommage
+    const newFileName = applyNamingTemplate(templatePattern, metadata);
     
-    console.log(`Renommage de ${originalFileName} vers ${newName}.mp3`);
-    fs.renameSync(filePath, newPath);
-    console.log(`Fichier renommé avec succès: ${originalFileName} → ${newName}.mp3`);
+    // Construire le nouveau chemin complet
+    const dirName = path.dirname(absoluteFilePath);
+    const newFilePath = path.join(dirName, `${newFileName}.mp3`);
+    
+    console.log(`Application du modèle de nommage: ${path.basename(absoluteFilePath)} -> ${newFileName}.mp3`);
+    
+    // Renvoyer le nouveau nom sans effectuer le renommage
+    res.json({ 
+      success: true, 
+      originalPath: absoluteFilePath,
+      newName: newFileName,
+      newPath: newFilePath,
+      logs: { message: `Modèle de nommage appliqué avec succès`, details: `Nouveau nom: ${newFileName}.mp3` } 
+    });
+  } catch (error) {
+    console.error('Erreur lors de l\'application du modèle de nommage:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API endpoint to rename file
+app.post('/api/rename', (req, res) => {
+  try {
+    const { filePath, newName, useTemplate } = req.body;
+    
+    // Vérifier que les paramètres requis sont présents
+    if (!filePath) {
+      console.error('Aucun chemin de fichier fourni pour le renommage');
+      return res.status(400).json({ success: false, error: 'File path is required' });
+    }
+    
+    if (!newName) {
+      console.error('Aucun nouveau nom fourni pour le renommage');
+      return res.status(400).json({ success: false, error: 'New name is required' });
+    }
+    
+    // Nettoyer le nouveau nom pour éviter les caractères problématiques dans les noms de fichiers
+    const sanitizedNewName = newName.replace(/[\\/:*?"<>|]/g, '_');
+    
+    const originalFileName = path.basename(filePath);
+    
+    console.log(`Demande de renommage du fichier: ${originalFileName} en ${sanitizedNewName}.mp3`);
+    console.log(`Chemin complet du fichier: ${filePath}`);
+    
+    // Vérifier si le chemin est absolu ou relatif
+    const absoluteFilePath = path.isAbsolute(filePath) ? filePath : path.join(__dirname, filePath);
+    console.log(`Chemin absolu utilisé: ${absoluteFilePath}`);
+    
+    if (!fs.existsSync(absoluteFilePath)) {
+      console.error(`Fichier non trouvé pour le renommage: ${absoluteFilePath}`);
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+    
+    const dir = path.dirname(absoluteFilePath);
+    const newPath = path.join(dir, sanitizedNewName + '.mp3');
+    
+    // Vérifier si le nouveau chemin existe déjà
+    if (fs.existsSync(newPath) && absoluteFilePath !== newPath) {
+      console.error(`Un fichier avec le nom ${sanitizedNewName}.mp3 existe déjà`);
+      return res.status(409).json({ success: false, error: 'A file with this name already exists' });
+    }
+    
+    console.log(`Renommage de ${originalFileName} vers ${sanitizedNewName}.mp3`);
+    try {
+      fs.renameSync(absoluteFilePath, newPath);
+    } catch (renameError) {
+      console.error(`Erreur lors du renommage: ${renameError.message}`);
+      return res.status(500).json({ success: false, error: `Erreur lors du renommage: ${renameError.message}` });
+    }
+    console.log(`Fichier renommé avec succès: ${originalFileName} → ${sanitizedNewName}.mp3`);
     
     res.json({ 
       success: true, 
       newPath,
       logs: {
         message: `Fichier renommé avec succès`,
-        details: `${originalFileName} → ${newName}.mp3`
+        details: `${originalFileName} → ${sanitizedNewName}.mp3`
       }
     });
   } catch (error) {
@@ -387,6 +550,9 @@ app.post('/api/rename', (req, res) => {
 app.post('/api/generate-cover', async (req, res) => {
   try {
     const { keywords } = req.body;
+    
+    console.log('Requête de génération de pochette reçue');
+    console.log('Mots-clés reçus:', keywords);
     
     if (!keywords || (Array.isArray(keywords) && keywords.length === 0)) {
       console.error('Aucun mot-clé fourni pour la génération de pochette');
@@ -420,30 +586,32 @@ app.post('/api/export-json', (req, res) => {
     
     console.log(`Début de l'exportation JSON pour: ${exportFilename}`);
     
-    const exportsDir = path.join(__dirname, 'exports');
-    if (!fs.existsSync(exportsDir)) {
-      console.log(`Création du répertoire d'exportation: ${exportsDir}`);
-      fs.mkdirSync(exportsDir, { recursive: true });
+    // Vérifier que les données sont valides
+    if (!data) {
+      console.error('Aucune donnée fournie pour l\'exportation JSON');
+      return res.status(400).json({ success: false, error: 'No data provided for export' });
     }
     
-    const jsonPath = path.join(exportsDir, exportFilename);
-    console.log(`Écriture du fichier JSON: ${jsonPath}`);
-    fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2));
-    console.log(`Exportation JSON terminée avec succès: ${exportFilename}`);
+    // Convertir les données en JSON formaté
+    const jsonContent = JSON.stringify(data, null, 2);
     
-    res.json({ 
-      success: true, 
-      path: jsonPath,
-      logs: {
-        message: `Exportation JSON terminée`,
-        details: `Fichier: ${exportFilename}\nChemin: ${jsonPath}`
-      }
-    });
+    // Configurer les en-têtes pour forcer le téléchargement
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename=${exportFilename}`);
+    
+    // Envoyer le contenu JSON directement au client pour téléchargement
+    console.log(`Envoi du fichier JSON pour téléchargement: ${exportFilename}`);
+    res.send(jsonContent);
+    
+    console.log(`Exportation JSON terminée avec succès: ${exportFilename}`);
   } catch (error) {
     console.error('Error exporting JSON:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// Intégrer les endpoints de traitement par lots
+require('./batch-endpoints')(app);
 
 // Serve the React app for any other routes
 app.get('*', (req, res) => {
@@ -459,5 +627,8 @@ app.listen(PORT, () => {
   console.log(`- POST /api/rename: Renommer un fichier`);
   console.log(`- POST /api/generate-cover: Générer une pochette d'album`);
   console.log(`- POST /api/export-json: Exporter les métadonnées en JSON`);
+  console.log(`- POST /api/write-batch-tags: Écrire les tags ID3 par lots`);
+  console.log(`- POST /api/rename-batch: Renommer des fichiers par lots`);
+  console.log(`- POST /api/export-batch-json: Exporter les métadonnées par lots`);
   console.log(`======================`);
 });
