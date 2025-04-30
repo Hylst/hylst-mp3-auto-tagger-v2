@@ -21,21 +21,15 @@ app.get('/api/status', (req, res) => {
   res.json({ status: 'ok', message: 'Le serveur est en cours d\'exécution' });
 });
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// Importer l'adaptateur Vercel pour la gestion des uploads
+const vercelAdapter = require('./vercel-adapter');
+
+// Utiliser le dossier d'uploads adapté pour Vercel ou environnement local
+const uploadsDir = vercelAdapter.getUploadsDir();
 
 // Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadsDir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
+const storage = multer.diskStorage(vercelAdapter.getMulterStorage());
+
 
 const upload = multer({ 
   storage: storage,

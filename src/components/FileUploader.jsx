@@ -32,12 +32,23 @@ const FileUploader = ({ onFilesUploaded, isLoading }) => {
         body: formData,
       });
 
+      // Vérifier si la réponse est OK avant de tenter de parser le JSON
+      if (!response.ok) {
+        throw new Error(`Erreur serveur: ${response.status} ${response.statusText}`);
+      }
+      
+      // Vérifier le type de contenu pour s'assurer qu'il s'agit bien de JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error(`Réponse non-JSON reçue: ${contentType}`);
+      }
+
       const data = await response.json();
 
       if (data.success) {
         onFilesUploaded(data.files);
       } else {
-        setError(data.error || 'Failed to upload files');
+        setError(data.error || 'Échec du téléchargement des fichiers');
       }
     } catch (err) {
       setError('Error uploading files: ' + err.message);
